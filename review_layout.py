@@ -155,6 +155,9 @@ def compact_report(index,r):
     parts.append('<h2>5. 부품 종류·수량·가격</h2>'+table(['기능 그룹','모델 구성 개수','형상 질량 kg'],[(g,n,round(w,2)) for g,(n,w) in groups.items()])+
         '<p>완제품 구매 단위와 모델 인스턴스 수는 다릅니다. 동일 규격 부품 단가가 입력되지 않아 전체 부품비는 <b>미확정</b>입니다.</p>'+
         '<details><summary>전체 모델 질량 명세</summary>'+table(['부품','그룹','kg'],[(q['name'],q.get('group',''),q.get('mass_kg')) for q in r.get('bom',[])])+'</details>')
+    if index == 1 and 'material_takeoff' in r:
+        from station1_materials import render
+        parts.append(render(r))
     parts.append('<h2>6. 전체 제작 공임·보완 사항</h2><p>전체 제작 공임: <b>견적 필요</b>. 사각관 절단·용접·마감·산세/부동태화·구매품 조립을 견적 범위에 포함합니다.</p>'+
         ''.join('<p>'+html.escape(x)+'</p>' for x in r.get('pending',[])[:4])+
         '<p>상온 예비 강도 계산이며 용접 피로·위생 마감·구매품 치수·실제 처리 성능은 별도 확인 항목입니다.</p>')

@@ -651,6 +651,8 @@ def analyze(c, specs=None, include_comparison=True):
         monthly_cost_krw=energy*c['assumed_all_in_energy_krw_kwh']+c['incremental_demand_charge_krw_month'],
         nameplate_monthly_energy_kwh=fullinput*hours,average_raw_throughput_kg_h=avgflow,
         energy_kwh_per_raw_tonne=runningkw/c['target_kg_h']*1000,warnings=warnings)
+    from station1_materials import takeoff
+    result['material_takeoff'] = takeoff(specs, c, massrows)
     if include_comparison:
         alt=dict(c,frame_type='solid' if c['frame_type']=='tube' else 'tube')
         ar=analyze(alt,include_comparison=False)
@@ -687,6 +689,8 @@ def write_report(output_dir, overrides=None):
     target=out/'01_VBK_Design_Review.html'
     target.write_text(report_html(r),encoding='utf-8')
     (out/'01_VBK_Calculations.json').write_text(json.dumps(r,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
+    from station1_materials import write_csv
+    write_csv(out, r['material_takeoff'])
     return target,r
 
 
