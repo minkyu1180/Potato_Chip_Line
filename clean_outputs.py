@@ -20,7 +20,8 @@ CODES={1:('VBK',),2:('SO',),3:('CRP',),4:('MS',),5:('BSM','CC'),6:('BL',),
 REPORTS={f'{i:02d}_{code}_{suffix}' for i,codes in CODES.items() for code in codes
          for suffix in ('Design_Review.html','Calculations.json')}
 REPORTS.update(('05_Slicer_Review.html','05_BOM.csv','05_Labor_Cost.csv',
-                '05_Tube_Cut_List.csv','05_Weld_Schedule.csv'))
+                '05_Tube_Cut_List.csv','05_Weld_Schedule.csv',
+                '01_Material_Summary.csv','01_Material_Detail.csv'))
 REPORT_DIRS={f'{i:02d}_{code}_Design_Review' for i,codes in CODES.items() for code in codes}
 SUMMARY={'05_11_Design_Review_Index.html','05_11_Review_Summary.json',
          '01_11_Design_Review_Index.html','01_11_Review_Summary.json',
