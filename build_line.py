@@ -1,33 +1,23 @@
-"""CATIA potato line R13: engineered welded 01-11 with per-machine reviews.
+"""CATIA potato line R23: stations 01-12, reviews and a saved full-line Product.
 
-py build_line.py --stage 2                     # rebuilt screw uses native Rib
-py build_line.py --stages 3 4 5                 # save each before the next
-py build_line.py --all                         # all eleven individual machines
-py build_line.py --assemble --zip              # whole line and dependencies
-py build_line.py --stage 11 --seasoning-angle 40
-py build_line.py --stages 5 6 7 8 9 10 11 --report-only  # no CATIA needed
-py build_line.py --stages 5 6 7 8 9 10 11 --rebuild      # save each before next
-py build_line.py --stage 9 --finish-config finishing_config.json
-py build_line.py --stage 2 --so-config station2_config.json
-py build_line.py --clean --dry-run            # list generated outputs; change nothing
-py build_line.py --clean                      # delete generated models/reports only
-py build_line.py --clean reports              # reports only; keep native models
-No arguments: station 1 report only, preserving the existing entry point.
-Keep station1_design.py, station2_design.py, peeler_design.py, peeler_report.py
-and slicer_design.py, build_catia.py, slicer_review.py, finishing_design.py,
-clean_outputs.py beside this script.
---rebuild creates a fresh numbered folder; existing/partial CAD stays intact.
+py build_line.py                       # build/reuse 1-12, reviews, full assembly
+py build_line.py --assemble-existing   # saved machines only; no station rebuild
+py build_line.py --assemble-existing --exclude-stage 4  # connect 3 directly to 5
+py build_line.py --stage 12            # only the supplied ten-line packaging machine
+py build_line.py --all                 # twelve individual machines without final line
+py build_line.py --report-only         # all twelve reviews; no CATIA
+py build_line.py --assemble --zip      # full line with reference folders in a ZIP
+py build_line.py --clean --dry-run     # preview recognized generated outputs
 
-Stations 1/2 retain the welded SUS304 geometry, calculations, functional Product
-groups and material specification parameters. Screw flights use an analytical
-helix + one fully constrained Rib profile, with normal-thickness compensation.
-Stations 3/4 add welded load paths and engineering reviews.
-Stations 6-11 retain R13; station 5 is replaced by the R16 welded-frame CC centrifugal slicer.
-Station 5 uses a CC-DL casing, fixed 1.5 mm knives and a separate 800 mm feeder.
-Calculations are preliminary and expose assumptions and pending purchase data.
-The merged assembly aligns actual ports along +X for the redesigned station 2.
-Python integration checks only; CATIA execution is left to the user.
-All lengths mm. Windows, CATIA V5 and pywin32 are required for native modeling.
+Keep all Python modules in this folder together. --rebuild saves new numbered
+folders and preserves existing CAD. Each machine is saved before the next one.
+Standalone reports and build status are in Overall_Review. Usage is documented
+in README/README_RUN_01_12.md. Station 12 retains the supplied draft geometry;
+its structural calculations and power specification remain unconfirmed.
+The 05-06 receiver exits sideways under the stand and lifts to the blancher.
+Full-line insertion uses saved file paths. Legacy transfers are repaired from
+saved CATParts with unique identities and explicitly saved functional groups.
+All lengths mm. Windows, CATIA V5 and pywin32 are needed for native modeling.
 """
 from __future__ import annotations
 import argparse
@@ -47,6 +37,8 @@ SO_CONFIG = {}
 CRP_CONFIG = {}
 MS_CONFIG = {}
 FINISH_CONFIGS = {}
+PACKAGING_CONFIG = {}
+PACKAGING_UPSTREAM_KG_H = None
 STEEL = (185, 192, 200)
 FRAME = (79, 101, 119)
 BELT = (46, 115, 151)
@@ -61,7 +53,7 @@ CAT_CST_DISTANCE = 1
 CAT_CST_ON = 2
 CAT_CST_RADIUS = 14
 CAT_CST_DRIVING = 0
-REVISION = 13
+REVISION = 23
 I = ((1.,0.,0.),(0.,1.,0.),(0.,0.,1.))
 AX = ((0.,1.,0.),(0.,0.,1.),(1.,0.,0.))
 AY = ((1.,0.,0.),(0.,0.,-1.),(0.,1.,0.))
@@ -779,8 +771,10 @@ def transfer12():
     return s,dict(name='Transfer_01_02',inlet=(0,0,980),outlet=(2010,0,1200),
                   description='Custom cleated transfer conveyor between the existing VBK and the SO tank.')
 
-def create_part(catia,spec,path,part_number=None):
-    doc=catia.Documents.Add('Part');part=doc.Part;body=part.MainBody
+def create_part(catia,spec,path,part_number=None,on_created=None):
+    doc=catia.Documents.Add('Part')
+    if on_created is not None:on_created(doc)
+    part=doc.Part;body=part.MainBody
     doc.Product.PartNumber=part_number or spec['name'];part.InWorkObject=body
     if spec.get('material'):
         # Catalog material assignment is intentionally not faked: these are readable metadata.
@@ -837,8 +831,11 @@ def pack(folder,dependencies=()):
 def update_status(base,name,record):
     from review_layout import status_path
     path=status_path(base);path.parent.mkdir(parents=True,exist_ok=True)
-    data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-    data[name]=record;path.write_text(json.dumps(data,indent=2,ensure_ascii=False),encoding='utf-8')
+    try:data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    except (OSError,ValueError):data={}
+    data[name]=record
+    temporary=path.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(data,indent=2,ensure_ascii=False),encoding='utf-8');temporary.replace(path)
 
 def open_document(catia,path):
     """Reuse an already open document, including the user's existing stage 1."""
@@ -1752,12 +1749,20 @@ def station5(slice_thickness=None):
 def build_station5(catia,base,rebuild=False,slice_thickness=None):
     from build_catia import build
     from slicer_review import write_report
-    _,meta=station5(slice_thickness);folder=new_folder(base,meta['name'])
+    specs,meta=station5(slice_thickness)
+    import slicer_design
+    signature=hashlib.sha256((model_signature(specs)+'|'+slicer_design.REVISION).encode()).hexdigest()
+    if not rebuild:
+        found=existing_station(base,meta,signature)
+        if found:
+            print('REUSE '+found['product'],flush=True)
+            return open_document(catia,Path(found['product'])),found
+    folder=new_folder(base,meta['name'])
     doc=build(catia,folder,meta['engineering_inputs'])
     write_report(folder,meta['engineering_inputs'])
     # The native builder uses a session-unique filename on every build.
     meta.update(product=str(Path(doc.FullName).resolve()),
-                generator_revision=16,build_status='complete')
+                generator_revision=REVISION,build_status='complete',model_signature=signature)
     (folder/'MODEL_INFO.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
     update_status(base,meta['name'],meta)
     return doc,meta
@@ -2425,16 +2430,24 @@ def existing_station(base,meta,signature):
     candidates=[];status=status_path(base)
     if not status.exists():status=base/'BUILD_STATUS.json'  # Legacy read-only compatibility.
     if status.exists():
-        record=json.loads(status.read_text(encoding='utf-8')).get(meta['name'],{})
+        try:record=json.loads(status.read_text(encoding='utf-8')).get(meta['name'],{})
+        except (OSError,ValueError):record={}
         if record.get('product'):candidates.append(Path(record['product']))
     candidates.append(base/meta['name']/meta.get('product_filename',meta['name']+'.CATProduct'))
+    from line_assembly import read_json,local_product
+    for info in base.glob(meta['name']+'*/MODEL_INFO.json'):
+        record=read_json(info)
+        if isinstance(record,dict) and record.get('name')==meta['name']:
+            product=local_product(record,info)
+            if product:candidates.append(product)
+    matches=[]
     for path in candidates:
         info=path.parent/'MODEL_INFO.json'
-        if path.is_file() and info.is_file():
-            record=json.loads(info.read_text(encoding='utf-8'))
-            if record.get('model_signature')==signature:
-                return dict(record,product=str(path.resolve()))
-    return None
+        if path.is_file() and path.stat().st_size and info.is_file():
+            record=read_json(info)
+            if isinstance(record,dict) and record.get('model_signature')==signature and record.get('build_status') not in ('partial','failed','building'):
+                matches.append(dict(record,product=str(path.resolve())))
+    return max(matches,key=lambda r:Path(r['product']).stat().st_mtime_ns) if matches else None
 
 def product_group(spec):
     """Explicit groups for 6-8; functional classification for legacy 1/2/9."""
@@ -2459,81 +2472,15 @@ def product_group(spec):
 
 
 def build_engineering_specs(catia,specs,meta,base,rebuild=False):
-    index=int(meta['name'][:2])
-    signature=hashlib.sha256((model_signature(specs)+'|rib-v1|'+meta.get('input_sha256','')).encode()).hexdigest()
-    if not rebuild:
-        found=existing_station(base,meta,signature)
-        if found:
-            print('REUSE '+found['product'],flush=True)
-            return open_document(catia,Path(found['product'])),found
-    folder=new_folder(base,meta['name'])
-    product_path=folder/(meta['name']+'.CATProduct')
-    if index==1:
-        from station1_design import write_report
-        report_path,_=write_report(folder,VBK_CONFIG)
-    elif index==2:
-        from station2_design import write_report
-        report_path,_=write_report(folder,SO_CONFIG)
-    elif index in (3,4):
-        from peeler_design import write_report
-        report_path,_=write_report(index,folder,CRP_CONFIG if index==3 else MS_CONFIG)
-    else:
-        from finishing_design import write_report
-        report_path,_=write_report(index,folder,meta['engineering_inputs'],specs,meta)
-    print('SAVED DESIGN REPORT '+str(report_path),flush=True)
-    doc=catia.Documents.Add('Product');root=doc.Product;root.PartNumber=meta['name']
-    root.Nomenclature=meta['description'];cache={};created=0;completed=0
-    grouped={};subassemblies=[]
-    for spec in specs:grouped.setdefault(product_group(spec),[]).append(spec)
-    subfolder=folder/'Subassemblies';subfolder.mkdir(parents=True,exist_ok=True)
-    identity=tuple(q for a in I for q in a)+(0.,0.,0.)
-    for group_no,(group_name,members) in enumerate(grouped.items(),1):
-        slug=group_name.replace(' ','_')
-        group_path=subfolder/f'{group_no:02d}_{slug}.CATProduct'
-        group_doc=catia.Documents.Add('Product');group_product=group_doc.Product
-        group_product.PartNumber=meta['name']+'_'+slug
-        group_product.Nomenclature=group_name
-        for i,spec in enumerate(members,1):
-            # A grouping change must not turn equal geometry into extra CATParts.
-            geometry={k:v for k,v in spec.items() if k not in ('name','origin','axes','group')}
-            key=hashlib.sha256(json.dumps(geometry,sort_keys=True).encode()).hexdigest()
-            try:
-                if key not in cache:
-                    path=folder/'Parts'/slug/(spec['name']+'.CATPart')
-                    prefix=f'{index:02d}_'
-                    part_number=spec['name'] if spec['name'].startswith(prefix) else prefix+spec['name']
-                    pdoc=create_part(catia,spec,path,part_number);cache[key]=path;created+=1
-                else:
-                    path=cache[key];pdoc=catia.Documents.Open(str(path))
-                comp=group_product.Products.AddExternalComponent(pdoc)
-                comp.Name=f'{i:03d}_{spec["name"]}'
-                # All group roots use the equipment datum; no transform is applied twice.
-                comp.Position.SetComponents(tuple(q for a in spec['axes'] for q in a)+tuple(spec['origin']))
-                pdoc.Close()
-            except Exception as exc:
-                raise RuntimeError(f'{meta["name"]} / {group_name} / {spec["name"]}: {exc}') from exc
-            completed+=1
-            if completed%20==0:print(f'{meta["name"]}: {completed}/{len(specs)} components [{group_name}]',flush=True)
-        group_product.Update();group_doc.SaveAs(str(group_path))
-        assembly=root.Products.AddExternalComponent(group_doc)
-        assembly.Name=group_name;assembly.Position.SetComponents(identity)
-        group_doc.Close()
-        subassemblies.append(dict(name=group_name,components=len(members),product=str(group_path)))
-        print('SAVED SUBASSEMBLY '+str(group_path),flush=True)
-    root.Update();doc.SaveAs(str(product_path))
-    meta.update(generator_revision=REVISION,model_signature=signature,helix_builder='Native Rib / analytical helix',components=len(specs),unique_catparts=created,product=str(product_path),
-                sketch_constraints='Driving XY coordinates and circle radii; no fake sketch colours',
-                planes_and_sketches='Hidden',subassemblies=subassemblies,
-                product_structure='Equipment / functional CATProduct / editable CATPart')
-    (folder/'MODEL_INFO.json').write_text(json.dumps(meta,indent=2,ensure_ascii=False),encoding='utf-8')
-    update_status(base,meta['name'],meta)
-    archive=pack(folder)
-    print('SAVED '+str(product_path),flush=True);print('ZIP '+str(archive),flush=True)
-
-    return doc,meta
+    from engineering_assembly import build
+    return build(catia,specs,meta,base,rebuild)
 
 
 def build_specs(catia,specs,meta,base,rebuild=False):
+    if meta['name'].startswith('Transfer_'):
+        from transfer_assembly import ensure_product
+        record=ensure_product(catia,specs,meta,base,rebuild)
+        return open_document(catia,Path(record['product'])),record
     specs=prepare_specs(specs,meta);signature=model_signature(specs)
     if not rebuild:
         found=existing_station(base,meta,signature)
@@ -2598,16 +2545,19 @@ def station_specs(index,**options):
     return {1:station1,2:station2,3:station3,4:station4,6:station6,7:station7,8:station8,10:station10}[index]()
 
 def build_station(catia,index,base=BASE,rebuild=False,**options):
+    if index==12:
+        from station12_design import build
+        return build(catia,base,rebuild,PACKAGING_CONFIG,PACKAGING_UPSTREAM_KG_H)
     if index==5:return build_station5(catia,base,rebuild,options.get('slice_thickness'))
     specs,meta=station_specs(index,**options)
     return build_engineering_specs(catia,specs,meta,base,rebuild)
 
-def transfer_between(index,upstream,downstream):
+def transfer_between(index,upstream,downstream,downstream_index=None):
     """Ground-based connecting conveyor with no imposed station elevation shift."""
     z0=upstream['outlet'][2];z1=downstream['inlet'][2]
     width0=upstream.get('outlet_width_mm',600.);width1=downstream.get('inlet_width_mm',600.)
     run=max(500.,abs(z1-z0)/.28+300.);width=max(width0,width1)
-    s=[];name=f'Transfer_{index:02d}_{index+1:02d}';est=dict(PREP_ESTIMATES)
+    s=[];name=f'Transfer_{index:02d}_{(index+1 if downstream_index is None else downstream_index):02d}';est=dict(PREP_ESTIMATES)
     p0=(0.,0.,z0);p1=(run,0.,z1);belt0=(80.,0.,z0);belt1=(run-80,0.,z1)
     prep_tapered_chute(s,name+'_Entry',p0,belt0,width0,width,120)
     fryer_conveyor(s,name+'_Conveyor',belt0,belt1,width,35,est,width+300,True)
@@ -2625,18 +2575,18 @@ def transfer_between(index,upstream,downstream):
                   inlet=p0,outlet=p1,inlet_width_mm=width0,outlet_width_mm=width1,length=run)
 
 def line_placements(metas,transfers):
-    # Engineered stations 1/2 and imported stations 3-11 all convey along +X.
-    # Align actual port locations without changing any station floor datum.
-    turn=I;stations={1:((0.,0.,0.),I)};links={}
-    for index in range(1,len(metas)):
+    # Compose directions at each connection; selected IDs need not be contiguous.
+    order=sorted(metas);stations={order[0]:((0.,0.,0.),I)};links={}
+    def compose(parent,relative):return tuple(transform_point(v,axes=parent) for v in relative)
+    for index,next_index in zip(order,order[1:]):
         out=transform_point(metas[index]['outlet'],*stations[index])
-        axes=I if index==1 else turn
+        axes=compose(stations[index][1],transfers[index].get('inlet_axes_relative_to_upstream',I))
         link_origin=vec(transform_point(transfers[index]['inlet'],axes=axes),out)
         links[index]=(link_origin,axes)
         inlet_world=transform_point(transfers[index]['outlet'],link_origin,axes)
-        station_axes=turn
-        station_origin=vec(transform_point(metas[index+1]['inlet'],axes=station_axes),inlet_world)
-        stations[index+1]=(station_origin,station_axes)
+        station_axes=compose(axes,transfers[index].get('outlet_axes_relative_to_transfer',I))
+        station_origin=vec(transform_point(metas[next_index]['inlet'],axes=station_axes),inlet_world)
+        stations[next_index]=(station_origin,station_axes)
     return dict(stations=stations,transfers=links)
 
 def export_step(doc,product_path):
@@ -2646,44 +2596,25 @@ def export_step(doc,product_path):
     except Exception as exc:raise RuntimeError(f'Native model saved at {path}; STEP export failed. Check CATIA STEP license/settings.') from exc
     print('STEP '+str(target),flush=True)
 
-def build_assembly(catia,base=BASE,rebuild=False,through=11,step=False,**options):
-    if options.get('hood_lift',0):raise ValueError('Full line assembly requires --hood-lift 0; use --stage 9 for a service pose.')
-    docs={};metas={};tdocs={};tmetas={};dependencies=[]
-    for i in range(1,through+1):
-        doc,meta=build_station(catia,i,base,rebuild,**options);docs[i]=doc;metas[i]=meta
-        dependencies.append(Path(meta['product']).parent)
-        if step:export_step(doc,meta['product'])
-    for i in range(1,through):
-        s,m=transfer_between(i,metas[i],metas[i+1])
-        tdocs[i],tmetas[i]=build_specs(catia,s,m,base,rebuild)
-        dependencies.append(Path(tmetas[i]['product']).parent)
-    locations=line_placements(metas,tmetas);name='Potato_Line_01_'+f'{through:02d}'
-    folder=new_folder(base,name);path=folder/(name+'.CATProduct')
-    doc=catia.Documents.Add('Product');root=doc.Product;root.PartNumber=name
-    root.Nomenclature='Integrated potato chips process line with separately saved machine assemblies'
-    for i in range(1,through+1):
-        c=root.Products.AddExternalComponent(docs[i]);c.Name=metas[i]['name'];place(c,*locations['stations'][i])
-        if i<through:
-            c=root.Products.AddExternalComponent(tdocs[i]);c.Name=tmetas[i]['name'];place(c,*locations['transfers'][i])
-    root.Update();doc.SaveAs(str(path))
-    info=dict(name=name,generator_revision=REVISION,product=str(path.resolve()),
-              stations=[metas[i]['product'] for i in metas],transfers=[tmetas[i]['product'] for i in tmetas],placements_mm=locations,
-              layout_note='Estimated transfer lengths reconcile actual model ports; floor-level placements; not a surveyed factory layout.')
-    (folder/'MODEL_INFO.json').write_text(json.dumps(info,ensure_ascii=False,indent=2),encoding='utf-8')
-    update_status(base,name,info);return doc,info,dependencies
+def build_assembly(catia,base=BASE,rebuild=False,through=12,step=False,**options):
+    from line_assembly import build
+    return build(catia,base,rebuild,through,step,**options)
 
-def main():
-    global BASE,VBK_CONFIG,SO_CONFIG,CRP_CONFIG,MS_CONFIG,FINISH_CONFIGS
+def main(argv=None):
+    global BASE,VBK_CONFIG,SO_CONFIG,CRP_CONFIG,MS_CONFIG,FINISH_CONFIGS,PACKAGING_CONFIG,PACKAGING_UPSTREAM_KG_H
     ap=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     action=ap.add_mutually_exclusive_group()
-    action.add_argument('--stage',type=int,choices=range(1,12))
-    action.add_argument('--stages',type=int,nargs='+',choices=range(1,12))
-    action.add_argument('--all',action='store_true',help='save eleven separate machine assemblies')
+    action.add_argument('--stage',type=int,choices=range(1,13))
+    action.add_argument('--stages',type=int,nargs='+',choices=range(1,13))
+    action.add_argument('--all',action='store_true',help='save twelve separate machines and their reviews; omit final line assembly')
     action.add_argument('--assemble',action='store_true',help='save machines and the full line')
+    action.add_argument('--assemble-existing',action='store_true',help='reuse saved stations; repair legacy transfer identities from saved CATParts; save full line')
     action.add_argument('--clean',nargs='?',const='all',choices=('all','models','reports'),
                         help='delete recognized generated outputs only; does not build or open CATIA')
     ap.add_argument('--dry-run',action='store_true',help='with --clean, preview without deleting anything')
-    ap.add_argument('--through',type=int,choices=range(1,12),default=None)
+    ap.add_argument('--through',type=int,choices=range(1,13),default=None)
+    ap.add_argument('--exclude-stage',type=int,choices=(4,),help='omit station 4 from full assembly and connect 3 to 5; preserve its saved files')
+    ap.add_argument('--existing-map',type=Path,help='with --assemble-existing: explicit station-number to CATProduct/port JSON mapping')
     ap.add_argument('--fryer-model',choices=tuple(FRYER_MODELS),default='PC4')
     ap.add_argument('--hood-lift',type=float,default=0.)
     ap.add_argument('--hood-transparent',action='store_true')
@@ -2699,12 +2630,13 @@ def main():
     ap.add_argument('--crp-config',type=Path)
     ap.add_argument('--ms-config',type=Path)
     ap.add_argument('--finish-config',type=Path,help='JSON object keyed by station number 5..11')
-    ap.add_argument('--report-only',action='store_true',help='station 1-11 reports without CATIA')
-    args=ap.parse_args()
+    ap.add_argument('--packaging-config',type=Path,help='station 12 geometry/packing target JSON')
+    ap.add_argument('--report-only',action='store_true',help='station 1-12 reports without CATIA; by itself selects all')
+    args=ap.parse_args(argv)
     if args.clean:
         # Cleanup is a separate action and must exit before reports/default stage/COM.
-        if (args.through is not None or args.rebuild or args.step or args.zip or args.report_only or
-            any((args.vbk_config,args.so_config,args.crp_config,args.ms_config,args.finish_config)) or
+        if (args.through is not None or args.exclude_stage is not None or args.rebuild or args.step or args.zip or args.report_only or
+            any((args.vbk_config,args.so_config,args.crp_config,args.ms_config,args.finish_config,args.packaging_config,args.existing_map)) or
             args.hood_lift or args.hood_transparent or args.fryer_model!='PC4' or
             args.seasoning_angle!=40. or args.slice_thickness is not None):
             ap.error('--clean accepts only --dry-run and --output-dir; use a separate command to build')
@@ -2714,27 +2646,42 @@ def main():
         if result['errors']:raise SystemExit(1)
         return
     if args.dry_run:ap.error('--dry-run requires --clean')
-    if args.stage is None and not args.stages and not args.all and not args.assemble:
-        args.stage=1;args.report_only=True
-    assemble=args.assemble
+    if args.stage is None and not args.stages and not args.all and not args.assemble and not args.assemble_existing:
+        if args.report_only:args.all=True
+        else:args.assemble=True
+    assemble=args.assemble or args.assemble_existing
     if args.through is not None and not assemble:ap.error('--through requires --assemble')
+    if args.exclude_stage is not None and not assemble:ap.error('--exclude-stage requires a full assembly action')
+    if args.exclude_stage is not None and (args.through or 12)<5:ap.error('--exclude-stage 4 requires --through 5 or higher')
     if assemble and args.hood_lift:ap.error('--hood-lift is for separate station 9 service poses')
     if not 0<=args.hood_lift<=650:ap.error('--hood-lift must be 0..650')
     if not 38<=args.seasoning_angle<=50:ap.error('--seasoning-angle must be 38..50')
-    requested=(list(range(1,(args.through or 11)+1)) if assemble else
-               (list(range(1,12)) if args.all else (args.stages or [args.stage])))
+    requested=([i for i in range(1,(args.through or 12)+1) if i!=args.exclude_stage] if assemble else
+               (list(range(1,13)) if args.all else (args.stages or [args.stage])))
     if len(requested)!=len(set(requested)):ap.error('--stages must not contain duplicate station numbers')
     if args.report_only and assemble:ap.error('--report-only uses --stage, --stages or --all; not --assemble')
     if args.vbk_config and 1 not in requested:ap.error('--vbk-config requires station 1')
     if args.so_config and 2 not in requested:ap.error('--so-config requires station 2')
     if args.crp_config and 3 not in requested:ap.error('--crp-config requires station 3')
     if args.ms_config and 4 not in requested:ap.error('--ms-config requires station 4')
+    if args.packaging_config and 12 not in requested:ap.error('--packaging-config requires station 12')
+    if args.existing_map and not args.assemble_existing:ap.error('--existing-map requires --assemble-existing')
+    if args.assemble_existing and (args.rebuild or any((args.vbk_config,args.so_config,args.crp_config,args.ms_config,args.finish_config,args.packaging_config))
+                                  or args.slice_thickness is not None or args.hood_transparent or args.fryer_model!='PC4' or args.seasoning_angle!=40.):
+        ap.error('--assemble-existing uses saved geometry; do not combine it with --rebuild or geometry/config overrides')
     if 9 not in requested and (args.hood_lift or args.hood_transparent or args.fryer_model!='PC4'):
         ap.error('Fryer options require station 9')
     BASE=base=args.output_dir.expanduser().resolve()
     from review_layout import migrate_legacy,station_folder,write_index as write_full_index
     base.mkdir(parents=True,exist_ok=True)
     migrate_legacy(base)
+    reuse_records=None
+    if args.assemble_existing:
+        from line_assembly import discover_existing,refresh_existing_reviews
+        try:reuse_records=discover_existing(base,args.through or 12,args.existing_map,exclude_stage=args.exclude_stage)
+        except (OSError,ValueError) as exc:ap.error(str(exc))
+        refresh_existing_reviews(base,reuse_records)
+        requested=[]  # Never regenerate default-input reviews for existing CAD.
     FINISH_CONFIGS={}
     if args.finish_config:
         try:
@@ -2753,7 +2700,7 @@ def main():
             if index==5:
                 # Previous belt-slicer configuration cannot define the new centrifugal mechanism.
                 if 'machine_other_mass_kg' in c or 'slice_thickness_mm' in c or c.get('blade_count')==10:
-                    print('Station 5: obsolete belt-slicer inputs ignored; using CC R16 inputs.',flush=True)
+                    print('Station 5: obsolete belt-slicer inputs ignored; using CC R17 inputs.',flush=True)
                     c={}
                 if args.slice_thickness is not None:c['slice_mm']=args.slice_thickness
             if index==9:
@@ -2801,6 +2748,18 @@ def main():
         print('SAVED DESIGN REPORT '+str(report_path),flush=True)
         write_full_index(base)
         for warning in calculation['warnings']:print('DESIGN REVIEW: '+warning,flush=True)
+    if 12 in requested:
+        from station12_design import configuration,write_report
+        try:
+            raw=json.loads(args.packaging_config.read_text(encoding='utf-8-sig')) if args.packaging_config else {}
+            PACKAGING_CONFIG=configuration(raw);PACKAGING_UPSTREAM_KG_H=None
+            if 11 in FINISH_CONFIGS:
+                from finishing_design import flow_balance
+                c=FINISH_CONFIGS[11]
+                PACKAGING_UPSTREAM_KG_H=flow_balance(c)['finished_kg_h']*(1+c['seasoning_fraction'])
+            page,result=write_report(station_folder(base,12),PACKAGING_CONFIG,upstream_kg_h=PACKAGING_UPSTREAM_KG_H)
+        except (OSError,ValueError,TypeError) as exc:ap.error('Station 12 report: '+str(exc))
+        print('SAVED DESIGN REPORT '+str(page),flush=True);write_full_index(base)
     if args.report_only:return
     try:
         import pythoncom
@@ -2816,19 +2775,30 @@ def main():
         old_alerts=catia.DisplayFileAlerts;catia.DisplayFileAlerts=False;catia.Visible=True
         try:
             if assemble:
-                doc,meta,deps=build_assembly(catia,base,args.rebuild,args.through or 11,args.step,**opts)
+                doc,meta,deps=build_assembly(catia,base,args.rebuild,args.through or 12,args.step,existing=reuse_records,exclude_stage=args.exclude_stage,**opts)
+                write_full_index(base)
                 if args.step:export_step(doc,meta['product'])
                 if args.zip:print('ZIP '+str(pack(Path(meta['product']).parent,deps)),flush=True)
             else:
-                for index in requested:
+                from line_assembly import open_paths,release_created_document
+                user_paths=open_paths(catia)
+                for position,index in enumerate(requested):
                     doc,meta=build_station(catia,index,base,args.rebuild,**opts)
-                    if args.step:export_step(doc,meta['product'])
-                    if args.zip and index==5:print('ZIP '+str(pack(Path(meta['product']).parent)),flush=True)
+                    try:
+                        if args.step:export_step(doc,meta['product'])
+                        if args.zip and index in (5,12):print('ZIP '+str(pack(Path(meta['product']).parent)),flush=True)
+                    finally:
+                        if position<len(requested)-1:
+                            release_created_document(doc,meta['product'],user_paths)
+                            doc=None
             show_document(catia,doc);print('DONE: saved CATProduct is open in CATIA.',flush=True)
-        finally:catia.DisplayFileAlerts=old_alerts
+        finally:
+            try:catia.DisplayFileAlerts=old_alerts
+            except Exception as exc:print('CATIA session unavailable while restoring alerts: '+str(exc),file=sys.stderr)
     finally:pythoncom.CoUninitialize()
 
 if __name__=='__main__':
+    sys.modules['build_line']=sys.modules[__name__]
     try:main()
     except Exception:
         traceback.print_exc()

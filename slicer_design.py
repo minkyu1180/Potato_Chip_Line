@@ -492,8 +492,8 @@ def bounds(m):
     lo=[min(p[i] for p in vertices) for i in range(3)];hi=[max(p[i] for p in vertices) for i in range(3)]
     return dict(min_mm=lo,max_mm=hi,size_mm=[b-a for a,b in zip(lo,hi)])
 
-def write_geometry(folder=ROOT,overrides=None):
-    folder=Path(folder);folder.mkdir(parents=True,exist_ok=True);m=geometry(overrides)
+def write_geometry(folder=None,overrides=None):
+    folder=Path(folder or ROOT/'Overall_Review'/'05_CC_Design_Review');folder.mkdir(parents=True,exist_ok=True);m=geometry(overrides)
     payload=dict(revision=REVISION,configuration=m.c,parts=m.parts,bounds=bounds(m),
                  evidence='CC-DL published envelope and CC potato mechanism; internal dimensions custom, not OEM fabrication drawings',
                  inlet=INLET,outlet=OUTLET,interfaces=m.interfaces,weld_schedule=m.welds,
@@ -504,6 +504,6 @@ def write_geometry(folder=ROOT,overrides=None):
     return m,payload
 
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--output-dir',type=Path,default=ROOT);ap.add_argument('--config',type=Path)
+    ap=argparse.ArgumentParser();ap.add_argument('--output-dir',type=Path,default=ROOT/'Overall_Review'/'05_CC_Design_Review');ap.add_argument('--config',type=Path)
     a=ap.parse_args();m,p=write_geometry(a.output_dir,json.loads(a.config.read_text()) if a.config else None)
     print(REVISION,len(m.parts),'instances /',p['master_count'],'masters',p['bounds'])

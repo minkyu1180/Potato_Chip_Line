@@ -14,9 +14,9 @@ import zipfile
 
 MARKER='.potato_line_generated.json'
 GENERATOR='potato-line-native'
-MODEL_NAME=re.compile(r'(?:(?:0[1-9]|1[01])_[A-Za-z0-9_]+|Transfer_\d{2}_\d{2}(?:_\w+)?|Potato_Line_01_\d{2}(?:_\w+)?)\Z')
+MODEL_NAME=re.compile(r'(?:(?:0[1-9]|1[0-2])_[A-Za-z0-9_]+|Transfer_\d{2}_\d{2}(?:_\w+)?|Potato_Line_01_\d{2}(?:_\w+)?)\Z')
 CODES={1:('VBK',),2:('SO',),3:('CRP',),4:('MS',),5:('BSM','CC'),6:('BL',),
-       7:('VDW',),8:('AD',),9:('FR',),10:('VDO',),11:('SD',)}
+       7:('VDW',),8:('AD',),9:('FR',),10:('VDO',),11:('SD',),12:('PKG',)}
 REPORTS={f'{i:02d}_{code}_{suffix}' for i,codes in CODES.items() for code in codes
          for suffix in ('Design_Review.html','Calculations.json')}
 REPORTS.update(('05_Slicer_Review.html','05_BOM.csv','05_Labor_Cost.csv',
@@ -24,7 +24,11 @@ REPORTS.update(('05_Slicer_Review.html','05_BOM.csv','05_Labor_Cost.csv',
 REPORT_DIRS={f'{i:02d}_{code}_Design_Review' for i,codes in CODES.items() for code in codes}
 SUMMARY={'05_11_Design_Review_Index.html','05_11_Review_Summary.json',
          '01_11_Design_Review_Index.html','01_11_Review_Summary.json',
+         '01_12_Design_Review_Index.html','01_12_Review_Summary.json',
+         '01_12_Assembly_Layout.html','01_12_Assembly_Layout.json',
          '05_to_06_Connection_Concept.html','05_to_06_Connection_Concept.json'}
+PACKAGING_REPORTS={'layout_manifest.json','validation.json','capacity_targets.json',
+                   'BOM.csv','line_connections.csv','control_sequence.txt','product_tree.txt'}
 MODEL_DATA={'MODEL_INFO.json','BUILD_STATUS.json','05_Geometry.json','05_Config.json',MARKER}
 CAD_EXTENSIONS={'.catpart','.catproduct','.stp','.step'}
 EVIDENCE={'MODEL_INFO.json','BUILD_STATUS.json',MARKER}
@@ -155,12 +159,13 @@ def plan_cleanup(folder,kind='all'):
             keep_evidence=kind=='models' and any(category(f.name)=='reports' for f in candidates)
             for f in candidates:
                 cat=category(f.name)
+                if model and p.name.startswith('12_') and f.parent==p and f.name in PACKAGING_REPORTS:cat='reports'
                 if cat is None:continue
                 if cat=='models' and not model and not (overall and f.name in ('05_Geometry.json','05_Config.json')):continue
                 if keep_evidence and f.name in EVIDENCE:continue
                 # Do not treat an arbitrary nested directory as a CAD output store.
                 rel=f.relative_to(p)
-                allowed=REPORT_DIRS|{'Legacy_Reports'} if overall else {'Parts','CATParts','Subassemblies'}
+                allowed=REPORT_DIRS|{'Legacy_Reports'} if overall else {'Parts','CATParts','Subassemblies','Products'}
                 if len(rel.parts)>1 and rel.parts[0] not in allowed:continue
                 if kind=='all' or cat==kind:add(f,p)
         elif p.is_file():

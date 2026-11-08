@@ -1,15 +1,15 @@
-"""Concise station reviews and the portable 01-11 Overall_Review index."""
+"""Concise station reviews and the portable 01-12 Overall_Review index."""
 from __future__ import annotations
 from collections import Counter,defaultdict
 from pathlib import Path
 import html
 import json
 
-REVISION='REVIEW-R18-2026-11-06'
+REVISION='REVIEW-R19-2026-11-06'
 STATIONS={1:('VBK','감자 투입 호퍼'),2:('SO','습식 나선 제석기'),3:('CRP','롤러 탈피기'),
  4:('MS','나이프 탈피기'),5:('CC','CC 감자 슬라이서'),6:('BL','연속 블랜처'),
  7:('VDW','진동 탈수기'),8:('AD','공기 건조기'),9:('FR','연속 튀김기'),
- 10:('VDO','진동 탈유기'),11:('SD','양념 드럼')}
+ 10:('VDO','진동 탈유기'),11:('SD','양념 드럼'),12:('PKG','감자칩 포장기')}
 CSS='''body{font:15px/1.6 "Malgun Gothic",sans-serif;color:#22343e;background:#eef2f3;margin:0}main{max-width:1120px;background:#fff;margin:24px auto;padding:32px}h1{font-size:27px}h2{font-size:20px;border-bottom:2px solid #dce7eb;padding-bottom:6px;margin-top:30px}table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}th,td{border:1px solid #ccd9df;padding:8px;text-align:left;vertical-align:top}th{background:#edf3f5}a{color:#146184}.scroll{overflow:auto}.note{padding:12px;background:#fff2d7}details{margin:12px 0}summary{cursor:pointer;color:#146184}small{color:#526773}@media print{main{margin:0;padding:0}body{background:white}tr{break-inside:avoid}button{display:none}}'''
 
 def root(base):
@@ -26,17 +26,21 @@ def migrate_legacy(base):
     base=clean.output_root(base);out=root(base)
     if out.exists() and not clean.safe_path(base,out):raise ValueError('Unsafe Overall_Review path')
     out.mkdir(exist_ok=True);moved=[]
+    def checked_target(target):
+        if not target.resolve().is_relative_to(out.resolve()):raise ValueError('Review target escapes Overall_Review')
+        for node in (target,*target.parents):
+            if node==base:break
+            if node.exists() and clean.is_link(node):raise ValueError('Review destination contains a link')
+        return target
     def move_file(source,target):
         if not clean.safe_path(base,source):return
-        if not target.resolve().is_relative_to(out.resolve()):raise ValueError('Review target escapes Overall_Review')
-        for parent in (target.parent,*target.parents):
-            if parent==base:break
-            if parent.exists() and clean.is_link(parent):raise ValueError('Review destination contains a link')
+        checked_target(target)
         target.parent.mkdir(parents=True,exist_ok=True)
         if target.exists():
             if source.read_bytes()==target.read_bytes():source.unlink();return
             original=out/'Legacy_Reports'/source.parent.name/source.name;target=original;n=1
             while target.exists():target=original.with_name(original.stem+f'_{n}'+original.suffix);n+=1
+            checked_target(target)
             target.parent.mkdir(parents=True,exist_ok=True)
         source.replace(target);moved.append(str(target))
     for folder in list(base.iterdir()):
@@ -47,17 +51,21 @@ def migrate_legacy(base):
         except OSError:pass
     for p in list(base.iterdir()):
         if not p.is_file() or not clean.safe_path(base,p):continue
-        if p.name in ('05_11_Design_Review_Index.html','05_11_Review_Summary.json'):
+        if p.name in ('05_11_Design_Review_Index.html','05_11_Review_Summary.json','01_11_Design_Review_Index.html','01_11_Review_Summary.json'):
             move_file(p,out/'Legacy_Reports'/p.name)
         elif p.name in clean.REPORTS or p.name in ('05_Geometry.json','05_Config.json'):
             i=next((i for i in STATIONS if p.name.startswith(f'{i:02d}_')),None)
             if i:move_file(p,station_folder(base,i)/p.name)
     old=base/'BUILD_STATUS.json';new=status_path(base)
     if old.is_file() and clean.safe_path(base,old):
+        checked_target(new)
         if new.exists():
             a=json.loads(old.read_text(encoding='utf-8'));b=json.loads(new.read_text(encoding='utf-8'))
             new.write_text(json.dumps(dict(a,**b),ensure_ascii=False,indent=2),encoding='utf-8');old.unlink()
         else:move_file(old,new)
+    for name in ('01_11_Design_Review_Index.html','01_11_Review_Summary.json'):
+        p=out/name
+        if p.is_file():move_file(p,out/'Legacy_Reports'/name)
     return moved
 def fmt(value,dec=2):
     if value is None:return '미확정'
@@ -75,21 +83,24 @@ def pick(r,*keys):return next((r[k] for k in keys if k in r and r[k] is not None
 def summary(index,r):
     c=r['inputs'];size=pick(r,'geometry_bbox','bbox','bounds') or {}
     installed=r.get('installed_motor_kw')
-    if index==1:installed=c['motor_kw']+c['outfeed_motor_kw']
-    if index==2:installed=c['motor_kw']
+    if index==1 and not r.get('review_unavailable'):installed=c['motor_kw']+c['outfeed_motor_kw']
+    if index==2 and not r.get('review_unavailable'):installed=c['motor_kw']
     rate=pick(c,'energy_rate_krw_kwh','assumed_all_in_energy_krw_kwh','electric_rate_krw_kwh')
     running=pick(r,'estimated_running_kw','input_power_kw')
     if index==5:running=c.get('measured_input_kw')
     return dict(index=index,name=STATIONS[index][1],revision=r['revision'],size_mm=size.get('size_mm'),
         flow_kg_h=pick(r,'normal_flow_kg_h','target_kg_h') or c.get('target_kg_h'),
-        flow_basis='튀김 후 칩' if index>=10 else '투입 감자',
+        flow_basis='포장기 자체 목표' if index==12 else ('튀김 후 칩' if index>=10 else '투입 감자'),
         dead_mass_kg=pick(r,'dead_mass_kg','total_machine_mass_kg'),
         installed_motor_kw=installed,running_kw=running,
         rated_input_kw=pick(r,'rated_load_input_kw','nameplate_input_kw','nameplate_input_envelope_kw'),
         hourly_cost_krw=None if running is None or rate is None else running*rate,
         monthly_cost_krw=pick(r,'monthly_cost_krw','month_cost_krw'),
         warnings=r.get('warnings',[]),input_sha256=r.get('input_sha256'),
-        status='재검토 항목 있음' if r.get('warnings') else '예비 계산 / 구매·실측 미확정 항목 있음')
+        status=('선택 모델의 계산 자료 없음' if r.get('review_unavailable') else
+                '원본 개념 모델 / 강도·전력 미확정' if index==12 else
+                '조건부 계산 통과 / 구매·실측 미확정' if index==5 and r.get('structural_calculation_pass') else
+                '재검토 항목 있음' if r.get('warnings') else '예비 계산 / 구매·실측 미확정 항목 있음'))
 
 def _drives(index,r):
     c=r['inputs']
@@ -110,7 +121,9 @@ def compact_report(index,r):
     frame=r.get('sections',r.get('frame_sections',{}))
     if not frame and index==2:frame={'기둥 B×t':(dim['leg_b'],dim['leg_t']),'가로보 B×t':(dim['beam_b'],dim['beam_t'])}
     if not frame and index in (3,4):frame={'기둥 B×t':dim['leg'],'가로보 B×t':dim['beam']}
-    frame_text=' / '.join(k+': '+fmt(v)+' mm' for k,v in frame.items())
+    labels={'leg':'기둥','leg_mm':'기둥','cross':'횡보','crossbeam_mm':'횡보','rail':'레일','brace':'가새'}
+    solid=index==1 and c.get('frame_type')=='solid'
+    frame_text=' / '.join(labels.get(k,k.replace(' B×t',''))+': '+fmt((v[0],v[0]) if solid else (v[0],v[0],v[1]) if len(v)==2 else v)+' mm' for k,v in frame.items())
     dimensions=[]
     if index==1:dimensions=[('호퍼 총 용적',fmt(r['gross_volume_m3'])+' m³'),('통감자 벌크 밀도',fmt(r['bulk_density_kg_m3'])+' kg/m³')]
     elif index==2:dimensions=[('수조 내부 L×W×H',fmt(r['internal_tank_mm'])+' mm'),('수조 총 용적',fmt(r['gross_tank_m3'])+' m³')]
@@ -118,7 +131,7 @@ def compact_report(index,r):
     else:
         dimensions=[(x['label'],fmt(x['value'])+' '+x['unit']) for x in r.get('details',[]) if any(t in x['label'] for t in ('내부','치수','용적','두께','폭','수위'))]
     parts.append('<h2>1. 크기와 구조</h2>'+table(['항목','설계 내용'],[
-        ('전체 L×W×H',fmt(s['size_mm'])+' mm'),('주 구조물','SUS304 용접 사각관'),('부재 단면',frame_text),*dimensions]))
+        ('전체 L×W×H',fmt(s['size_mm'])+' mm'),('주 구조물','SUS304 용접 '+('중실 사각봉' if solid else '사각관')),('부재 단면 '+('B×H' if solid else 'B×H×t'),frame_text),*dimensions]))
     inventory=pick(r,'working_potato_mass_kg','working_potato_kg','normal_product_kg')
     blocked=pick(r,'brim_potato_mass_kg','blocked_potato_kg','blocked_product_kg','dry_geometric_potato_capacity_kg')
     load=pick(r,'design_vertical_load_n','vertical_design_n','total_vertical_design_n')
@@ -159,7 +172,11 @@ def compact_report(index,r):
         ''.join('<p>'+html.escape(x)+'</p>' for x in r.get('pending',[])[:4])+
         '<p>상온 예비 강도 계산이며 용접 피로·위생 마감·구매품 치수·실제 처리 성능은 별도 확인 항목입니다.</p>')
     warning='<div class="note">'+ '<br>'.join(html.escape(str(x)) for x in r.get('warnings',[]))+'</div>' if r.get('warnings') else ''
-    return document(f'{index:02d} {STATIONS[index][1]} · 디자인 리뷰','<p>'+html.escape(r['revision'])+' · '+REVISION+'</p>'+warning+''.join(parts)+
+    import importlib
+    module='station1_design' if index==1 else 'station2_design' if index==2 else 'peeler_design' if index in (3,4) else 'finishing_design'
+    sources=getattr(importlib.import_module(module),'SOURCES',[])
+    source_html='<details><summary>자료 출처와 적용 범위</summary>'+''.join('<p><a href="'+html.escape(url,quote=True)+'">'+html.escape(title)+'</a> · '+html.escape(note)+'</p>' for _,title,url,note in sources)+'</details>'
+    return document(f'{index:02d} {STATIONS[index][1]} · 디자인 리뷰','<p>'+html.escape(r['revision'])+' · '+REVISION+'</p>'+warning+''.join(parts)+source_html+
         '<p><a href="'+data_name(index)+'">전체 계산값 JSON</a> · 실행·폴더 안내는 별도 README를 참조하세요.</p>')
 
 def write_index(base):
@@ -172,29 +189,40 @@ def write_index(base):
         href=page.relative_to(out).as_posix()
         vals=[fmt(s['size_mm']),fmt(s['flow_kg_h'])+' / '+s['flow_basis'],fmt(s['dead_mass_kg']),fmt(s['installed_motor_kw']),fmt(s['running_kw']),s['status']]
         rows.append(f'<tr><td><a href="{href}">{i:02d} {html.escape(label)}</a></td>'+''.join('<td>'+html.escape(v)+'</td>' for v in vals)+'</tr>')
-    data=dict(revision=REVISION,complete=len(records)==11,stations=records,
-        note='개별 설계 운전점의 비교표. 1~4번과 5~11번 목표 유량이 다르며, 5번 실제 전기입력 미확정이므로 전체 소비전력/비용을 확정하지 않음.')
-    (out/'01_11_Review_Summary.json').write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
+    data=dict(revision=REVISION,complete=len(records)==12,stations=records,
+        note='개별 설계 운전점의 비교표. 공정별 목표 유량과 포장기 자체 목표는 다르며, 5·12번 실제 전기입력 미확정으로 전체 소비전력/비용을 확정하지 않음.')
+    (out/'01_12_Review_Summary.json').write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
     headers=('기계 / 개별 리뷰','L×W×H mm','유량 kg/h / 기준','자중 kg','모터 kW','정상 입력 kW','검토 상태')
-    body='<p>1~11번 전체 공정 · '+REVISION+'</p><div class="scroll"><table><tr>'+''.join('<th>'+x+'</th>' for x in headers)+'</tr>'+''.join(rows)+'</table></div>'
-    body+='<p class="note">'+html.escape(data['note'])+'</p><p><a href="05_to_06_Connection_Concept.html">5→6번 배출 연결 제안</a> · <a href="01_11_Review_Summary.json">전체 요약 JSON</a> · <a href="README_KO.md">사용 안내</a></p>'
-    target=out/'01_11_Design_Review_Index.html';target.write_text(document('감자칩 생산 라인 · 전체 디자인 리뷰',body),encoding='utf-8')
-    source=Path(__file__).resolve().parent/'README_OVERALL_REVIEW_KO.md'
-    if source.is_file():(out/'README_KO.md').write_text(source.read_text(encoding='utf-8'),encoding='utf-8')
+    body='<p>1~12번 전체 공정 · '+REVISION+'</p><div class="scroll"><table><tr>'+''.join('<th>'+x+'</th>' for x in headers)+'</tr>'+''.join(rows)+'</table></div>'
+    body+='<p class="note">'+html.escape(data['note'])+'</p><p><a href="05_to_06_Connection_Concept.html">5→6번 연결 설계</a> · <a href="01_12_Review_Summary.json">전체 요약 JSON</a> · <a href="README.md">사용 안내</a></p>'
+    body+='<p>4번 제외 조립: <code>py build_line.py --assemble-existing --exclude-stage 4</code>. 조립 순서는 1→2→3→5→6→7→8→9→10→11→12입니다. 아래 목록은 보관 중인 개별 기계 리뷰이며, 4번 리뷰가 있어도 제외 조립에 포함된다는 뜻은 아닙니다.</p>'
+    if (out/'01_12_Assembly_Layout.html').is_file():body+='<p><a href="01_12_Assembly_Layout.html">마지막 전체 조립의 배치와 참조 파일</a></p>'
+    target=out/'01_12_Design_Review_Index.html';target.write_text(document('감자칩 생산 라인 · 전체 디자인 리뷰',body),encoding='utf-8')
+    code=Path(__file__).resolve().parent
+    source=code/'README'/'README_RUN_01_12.md'
+    if not source.is_file():source=code/'README_RUN_01_12.md'
+    if source.is_file():(out/'README.md').write_text(source.read_text(encoding='utf-8'),encoding='utf-8')
     write_connection_concept(out)
     return target
 
-def write_connection_concept(out):
-    data=dict(station5_outlet_mm=[419,0,500],outlet_direction=[0,0,-1],station6_inlet_z_mm=1200,
-        proposal='Side take-away receiver followed by an inclined mesh conveyor; turn the blancher along the outgoing conveyor.',
-        concept_only=True,existing_auto_assembly_supports_direction=False,
-        suggested_receiver_width_mm=500,suggested_receiver_z_mm=350,
-        suggested_station5_pedestal_mm=250,incline_horizontal_run_mm=3200,
-        incline_rise_mm=850,estimated_incline_deg=14.87)
-    body=table(['현재 모델 기준','값'],[('5번 배출','X419 / Y0 / Z500 mm, 아래 방향, 플랜지 Ø492 mm'),('6번 투입','Z1200 mm, 수평 투입'),('높이 차','700 mm; 아래 배출을 수평 포트처럼 곧바로 연결할 수 없음')])
-    body+='<h2>추천: 측면 받이 + 경사 메쉬 컨베이어</h2><p>하부 원추 아래에서 받는 짧은 수평 구간을 두고, 모터가 있는 +X 방향을 피해 −Y 측면으로 빼냅니다. 본체 프레임 밖에서 상승을 시작하고, 블랜처는 컨베이어 출구 방향으로 돌려 배치합니다.</p>'
-    body+=table(['제안 치수 / 구성','초기 검토값'],[('받이 벨트 폭 / 상면','500 / Z350 mm'),('5번 받침 프레임 증고','약 250 mm 제안 → 배출 Z750 mm; 하부 가로 보 아래 통과 공간 확보'),('상승 구간','Z350 → Z1200, 수평 약 3200 mm, 경사 약 14.9°'),('제품 보호','덮인 곡면 받이 슈트로 낙하 충격 완화, 미세 타공 또는 적합한 메쉬, 낮은 이송 리브·측면 가이드'),('습식 공정 연결','전분·물받이, 배수, 탈착 세척 구조; 물을 추가한다면 블랜처 열수지에 반영')])
-    body+='<p>치수는 조립 제안이며 이번 CAD에 추가하지 않았습니다. 받침 증고의 전도·앵커 검토, 받이 구간과 다리/하부 보 사이 여유, 임펠러 구동부 정비 공간을 후속 설계에서 확인해야 합니다. 기존 5번을 올리지 않으면 하부 보 사이가 좁아 낮은 받이 구조와 해당 보의 재배치 검토가 필요합니다.</p>'
-    body+='<p class="note">현재 자동 어셈블리는 포트 높이를 맞춘 +X 직선 연결입니다. 이번 제안처럼 아래 배출·측면 인출·90° 방향 전환을 구현한 상태가 아닙니다. 이 제안을 채택하면 Transfer_05_06과 6번 이후 배치를 함께 수정해야 합니다.</p>'
-    (out/'05_to_06_Connection_Concept.html').write_text(document('5번 슬라이서 → 6번 블랜처 · 조립 제안',body),encoding='utf-8')
+def write_connection_concept(out,design=None):
+    from transfer_05_06 import design_data
+    data=dict(design or design_data(),geometry_implemented=True,catia_validation_performed=False,
+              report_basis='Selected assembly ports' if design else 'Source defaults; not proof of an existing CAD build')
+    body='<p>R22 코드가 Transfer_05_06.CATProduct를 생성합니다. 받이 슈트 → 낮은 수평 벨트 → 연결 슈트 → 경사 벨트 → 6번 투입 슈트 순서입니다. 5번은 높이지 않고, 6번 이후 기계는 5번 기준 −Y 방향으로 90° 돌립니다.</p>'
+    body+=table(['항목','설계 치수 / 동작'],[
+        ('하향 배출 높이',fmt(data['outlet_z_mm'])+' mm; 개방된 사각 받이 입구 500×500 mm'),
+        ('받이 벨트',fmt(data['receiver_width_mm'])+' mm 폭 × 1,300 mm 축간 거리 / 상면 Z150 mm'),
+        ('하부 보 통과','가이드 상단 Z220 mm / 기존 보 하단 Z250 mm / 명목 여유 30 mm'),
+        ('기둥 통과','CC X119 기둥의 내측면 X159 / 받이 레일 외측 X171 / 명목 여유 12 mm'),
+        ('기존 발판 통과','레일 상단 Z70 / CC 발판 하단 Z88 / 명목 여유 18 mm'),
+        ('상승 구간',f"Z140 → Z{fmt(data['incline_end_mm'][2])} mm / 수평 {fmt(data['incline_horizontal_run_mm'])} mm / 경사 {fmt(data['incline_angle_deg'])}°"),
+        ('경사 벨트 폭',fmt(data['incline_width_mm'])+' mm; 15 mm 이송 리브, 연속 측면 가이드'),
+        ('설치 길이','배출 중심에서 6번 투입점까지 '+fmt(data['outlet_mm'][0])+' mm, 5번 −Y 방향'),
+        ('프레임 / 받이','SUS304 용접 사각관, 물받이·배수 구멍, 개별 모터 받침과 지면 지지'),
+        ('벨트','슬라이스가 빠지지 않는 연속 벨트 표현. 실제 식품 접촉 재질·구매 규격은 선정 필요')])
+    body+='<p>위 여유는 현재 CC 프레임의 코드 치수를 기준으로 한 배치값입니다. 다른 형상의 5번 모델에는 그대로 적용할 수 없습니다. 저상 받이의 세척 접근성, 낙하에 따른 슬라이스 손상, 처리량·구동부 사양은 후속 상세 설계 항목입니다. CATIA 실행 및 간섭 검증은 수행하지 않았습니다.</p>'
+    body+='<h2>4번 제외 조립</h2><p><code>py build_line.py --assemble-existing --exclude-stage 4</code>는 기존 1·2·3·5~12번을 재사용하고 Transfer_03_05와 Transfer_05_06을 생성합니다. 결과는 <code>Potato_Line_01_12_No04</code> 폴더에 저장되며 기존 4번 파일은 보존합니다. 새로 만들 때는 <code>py build_line.py --exclude-stage 4</code>를 사용합니다.</p>'
+    body+='<p>파일명의 Concept는 기존 링크 호환을 위해 유지합니다. 이 문서는 생성 코드의 설계 설명이며 저장된 CATIA 모델의 검증 완료 보고서가 아닙니다.</p>'
+    (out/'05_to_06_Connection_Concept.html').write_text(document('5번 슬라이서 → 6번 블랜처 · 연결 설계 R22',body),encoding='utf-8')
     (out/'05_to_06_Connection_Concept.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')

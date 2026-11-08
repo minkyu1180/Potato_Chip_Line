@@ -371,6 +371,7 @@ def report_html(r):
         ('컨베이어','별도 투입용 1개, 폭 800 mm · 구동 풀리 Ø100 · 나머지 Ø50'),
         ('프레임','SUS304 사각관 용접: 주 다리·보 80×80×'+fmt(c['leg_wall_mm'],0)+' mm, 보조 50×50×3 mm'),
         ('원추형 부품','Swing Away cover / Lower Discharge Cone / Hopper: XZ 단면을 수직 Z축 주위로 360° 회전'),
+        ('감속기 간섭 수정','외부 케이스 X885 시작: 지지 링 끝 X864와 21 mm 여유. Z700 수평축은 원추 Ø70 구멍과 밀폐 보호관으로 연결' if 'R17' in r['revision'] else '이 계산 스냅샷은 R17 외부 감속기 변경 전 모델입니다.'),
         ('모터 색상','본체 모터·팬 커버·직각 감속기·투입 기어드모터: 공통 파란색 RGB 47, 92, 158'),
         ('슈트 하부 지지','경사 레일 → 틈을 채운 받침 → 기둥 → 가로 보 → 돌출 팔·거싯 → 컨베이어 다리'),
         ('개정 부품','기존 C형 프레임·볼트식 프레임 스플라이스·떠 있던 연결판 삭제; 사각관·끝막음·용접 거싯 추가'),
@@ -492,7 +493,7 @@ def report_html(r):
     return '<!doctype html><html lang="ko"><meta charset="utf-8"><title>5번 CC 슬라이서 리뷰</title><style>'+css+'</style><h1>5번 CC 방식 감자 슬라이서 · 1.5 mm</h1><p>'+esc(r['revision'])+' · 모델링 Python 저장 후 작성한 리뷰 생성 코드 · 실행·검증은 사용자 수행</p>'+''.join(s)+'</html>'
 
 def write_report(folder=None,config=None,cost_inputs=None):
-    folder=Path(folder or d.ROOT/'Review');folder.mkdir(parents=True,exist_ok=True)
+    folder=Path(folder or d.ROOT/'Overall_Review'/'05_CC_Design_Review');folder.mkdir(parents=True,exist_ok=True)
     r=calculations(config,cost_inputs);page=folder/'05_Slicer_Review.html'
     page.write_text(report_html(r),encoding='utf-8')
     (folder/'05_CC_Calculations.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8')
